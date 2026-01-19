@@ -1,6 +1,7 @@
-const express = require("express");
-const cors = require("cors");
-const { ethers } = require("ethers");
+import express from "express";
+import cors from "cors";
+import { ethers } from "ethers";
+import fetch from "node-fetch";
 
 const app = express();
 app.use(cors());
@@ -38,24 +39,24 @@ const RPC = {
 // -------------------------------
 const CHAINLINK_FEEDS = {
   ethereum: {
-    native: "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419", // ETH/USD
+    native: "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419",
   },
   base: {
-    native: "0x4d5f47fa6a74757f35c14fd3a6ef8e3c9bc514e8", // ETH/USD
+    native: "0x4d5f47fa6a74757f35c14fd3a6ef8e3c9bc514e8",
   },
   arbitrum: {
-    native: "0x639fe6ab55c921f74e7fac1ee960c0b6293ba612", // ETH/USD
+    native: "0x639fe6ab55c921f74e7fac1ee960c0b6293ba612",
   },
   polygon: {
-    native: "0xab594600376ec9fd91f8e885dadf0ce036862de0", // MATIC/USD
+    native: "0xab594600376ec9fd91f8e885dadf0ce036862de0",
   },
   optimism: {
-    native: "0x13e3ee699d1909e989722e753853ae30b17e08c5", // ETH/USD
+    native: "0x13e3ee699d1909e989722e753853ae30b17e08c5",
   },
 };
 
 // -------------------------------
-// TOKEN LIST (curated, extend later)
+// TOKEN LIST
 // -------------------------------
 const TOKENS = {
   ethereum: [
@@ -119,7 +120,7 @@ const TOKENS = {
 };
 
 // -------------------------------
-// COMMON SPENDERS (approvals)
+// COMMON SPENDERS
 // -------------------------------
 const SPENDERS = {
   ethereum: [
@@ -163,8 +164,7 @@ async function getProvider(chain) {
       })
   );
 
-  const winner = await Promise.any(attempts);
-  return winner;
+  return Promise.any(attempts);
 }
 
 async function getNativePrice(chain) {
@@ -179,16 +179,12 @@ async function getNativePrice(chain) {
 
     const priceFeed = new ethers.Contract(feedAddress, abi, provider);
     const roundData = await priceFeed.latestRoundData();
-    const price = Number(roundData[1]) / 1e8;
-
-    return price;
-  } catch (err) {
-    console.log("Price feed error:", err);
+    return Number(roundData[1]) / 1e8;
+  } catch {
     return null;
   }
 }
 
-// Coingecko price fetcher for token list
 async function getTokenPrices(tokens) {
   const ids = [...new Set(tokens.map((t) => t.coingeckoId).filter(Boolean))];
   if (ids.length === 0) return {};
@@ -199,15 +195,12 @@ async function getTokenPrices(tokens) {
 
   try {
     const res = await fetch(url);
-    const data = await res.json();
-    return data; // { id: { usd: number } }
-  } catch (err) {
-    console.log("Coingecko price error:", err);
+    return await res.json();
+  } catch {
     return {};
   }
 }
 
-// Simple heuristic protocol tagging based on address patterns (placeholder)
 function inferProtocolsFromTx(tx) {
   const to = (tx.to || "").toLowerCase();
   const tags = [];
@@ -223,7 +216,6 @@ function inferProtocolsFromTx(tx) {
   return tags;
 }
 
-// Simple wallet health scoring heuristic
 function computeWalletHealthScore(summary) {
   let score = 80;
 
@@ -236,13 +228,9 @@ function computeWalletHealthScore(summary) {
   if (summary.riskFlags.includes("High gas usage")) score -= 5;
   if (summary.riskFlags.includes("Interacts with unknown contracts")) score -= 10;
 
-  if (score < 0) score = 0;
-  if (score > 100) score = 100;
-
-  return score;
+  return Math.max(0, Math.min(100, score));
 }
 
-// Generate a simple "AI-style" summary
 function generateAISummary(summary) {
   const parts = [];
 
@@ -261,17 +249,14 @@ function generateAISummary(summary) {
   }
 
   if (summary.riskFlags.length > 0) {
-    parts.push(
-      `Key risk considerations: ${summary.riskFlags.join(", ")}.`
-    );
+    parts.push(`Key risk considerations: ${summary.riskFlags.join(", ")}.`);
   } else {
-    parts.push("No major risk signals were detected from the limited heuristics used.");
+    parts.push("No major risk signals were detected.");
   }
 
   return parts.join(" ");
 }
 
-// Basic contract intelligence
 async function getContractIntel(provider, address) {
   try {
     const code = await provider.getCode(address);
@@ -288,7 +273,7 @@ async function getContractIntel(provider, address) {
     }
 
     const txCount = await provider.getTransactionCount(address);
-    // We don't have direct deploy tx here without scanning history; keep it simple
+
     return {
       isContract: true,
       codeSize: (code.length - 2) / 2,
@@ -296,7 +281,7 @@ async function getContractIntel(provider, address) {
       ageBlocks: null,
       txCount,
     };
-  } catch (e) {
+  } catch {
     return {
       isContract: null,
       codeSize: null,
@@ -307,14 +292,13 @@ async function getContractIntel(provider, address) {
   }
 }
 
-// Basic wallet activity (timeline) using logs for known tokens
 async function getWalletActivity(provider, chain, address) {
   try {
     const tokenList = TOKENS[chain] || [];
     if (tokenList.length === 0) return [];
 
     const latestBlock = await provider.getBlockNumber();
-    const fromBlock = latestBlock - 5000 > 0 ? latestBlock - 5000 : 0;
+    const fromBlock = Math.max(0, latestBlock - 5000);
 
     const iface = new ethers.Interface(ERC20_ABI);
     const transferTopic = iface.getEvent("Transfer").topicHash;
@@ -338,8 +322,8 @@ async function getWalletActivity(provider, chain, address) {
           const target = address.toLowerCase();
           if (from !== target && to !== target) continue;
 
-          const amount = Number(parsed.args.value) / 10 ** token.decimals;
-          const direction = to === target ? "in" : "out";
+          const amount =
+            Number(parsed.args.value) / 10 ** token.decimals;
 
           events.push({
             type: "token_transfer",
@@ -348,21 +332,17 @@ async function getWalletActivity(provider, chain, address) {
             from: parsed.args.from,
             to: parsed.args.to,
             amount,
-            direction,
+            direction: to === target ? "in" : "out",
             blockNumber: log.blockNumber,
             txHash: log.transactionHash,
           });
-        } catch (e) {
-          continue;
-        }
+        } catch {}
       }
     }
 
-    // Sort newest first
     events.sort((a, b) => b.blockNumber - a.blockNumber);
     return events.slice(0, 25);
-  } catch (e) {
-    console.log("Activity error:", e);
+  } catch {
     return [];
   }
 }
@@ -370,13 +350,10 @@ async function getWalletActivity(provider, chain, address) {
 // -------------------------------
 // ROUTES
 // -------------------------------
-
-// Health
 app.get("/", (req, res) => {
   res.json({ status: "VANTA backend is running" });
 });
 
-// Transaction diagnose (with ERC20 transfers + contract intel)
 app.post("/diagnose", async (req, res) => {
   try {
     const { txHash, chain } = req.body;
@@ -399,7 +376,6 @@ app.post("/diagnose", async (req, res) => {
 
     const protocols = inferProtocolsFromTx(tx);
 
-    // Decode ERC20 transfers for known tokens
     const tokenList = TOKENS[chain] || [];
     const prices = await getTokenPrices(tokenList);
     const iface = new ethers.Interface(ERC20_ABI);
@@ -407,7 +383,7 @@ app.post("/diagnose", async (req, res) => {
 
     const tokenTransfers = [];
 
-    if (receipt && receipt.logs) {
+    if (receipt?.logs) {
       for (const log of receipt.logs) {
         const tokenMeta = tokenList.find(
           (t) => t.address.toLowerCase() === log.address.toLowerCase()
@@ -417,11 +393,11 @@ app.post("/diagnose", async (req, res) => {
 
         try {
           const parsed = iface.parseLog(log);
-          const amountRaw = parsed.args.value;
-          const amount = Number(amountRaw) / 10 ** tokenMeta.decimals;
+          const amount =
+            Number(parsed.args.value) / 10 ** tokenMeta.decimals;
           const priceData = prices[tokenMeta.coingeckoId];
           const usd =
-            priceData && priceData.usd ? amount * priceData.usd : null;
+            priceData?.usd ? amount * priceData.usd : null;
 
           tokenTransfers.push({
             token: tokenMeta.symbol,
@@ -431,15 +407,13 @@ app.post("/diagnose", async (req, res) => {
             amount,
             amountUsd: usd,
           });
-        } catch (e) {
-          continue;
-        }
+        } catch {}
       }
     }
 
     const toIntel = tx.to ? await getContractIntel(provider, tx.to) : null;
 
-    const result = {
+    res.json({
       chain,
       txHash,
       from: tx.from,
@@ -453,16 +427,13 @@ app.post("/diagnose", async (req, res) => {
       protocols,
       tokenTransfers,
       contractIntel: toIntel,
-    };
-
-    res.json(result);
+    });
   } catch (err) {
     console.error("DIAGNOSE ERROR:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// Wallet summary + health score + token portfolio + activity
 app.post("/wallet-summary", async (req, res) => {
   try {
     const { address, chain } = req.body;
@@ -473,13 +444,11 @@ app.post("/wallet-summary", async (req, res) => {
 
     const provider = await getProvider(chain);
 
-    // Native balance
     const balance = await provider.getBalance(address);
     const priceNative = await getNativePrice(chain);
     const valueEth = Number(balance) / 1e18;
     const nativeUsd = priceNative ? valueEth * priceNative : 0;
 
-    // ERC20 balances
     const tokenList = TOKENS[chain] || [];
     const prices = await getTokenPrices(tokenList);
 
@@ -499,7 +468,7 @@ app.post("/wallet-summary", async (req, res) => {
 
         const priceData = prices[token.coingeckoId];
         const usd =
-          priceData && priceData.usd ? amount * priceData.usd : 0;
+          priceData?.usd ? amount * priceData.usd : 0;
 
         tokensUsdTotal += usd;
 
@@ -509,13 +478,10 @@ app.post("/wallet-summary", async (req, res) => {
           amount,
           amountUsd: usd,
         });
-      } catch (e) {
-        continue;
-      }
+      } catch {}
     }
 
     const totalUsdValue = nativeUsd + tokensUsdTotal;
-
     const txCount = await provider.getTransactionCount(address);
 
     const riskFlags = [];
@@ -553,7 +519,6 @@ app.post("/wallet-summary", async (req, res) => {
   }
 });
 
-// Real approvals engine (for curated tokens + spenders)
 app.post("/approvals", async (req, res) => {
   try {
     const { address, chain } = req.body;
@@ -582,7 +547,7 @@ app.post("/approvals", async (req, res) => {
             spender: spender.address,
             spenderLabel: spender.label,
             amount,
-            unlimited: amount > 1_000_000_000, // crude heuristic
+            unlimited: amount > 1_000_000_000,
             risk:
               amount > 100000
                 ? "high"
@@ -590,9 +555,7 @@ app.post("/approvals", async (req, res) => {
                 ? "medium"
                 : "low",
           });
-        } catch (e) {
-          continue;
-        }
+        } catch {}
       }
     }
 
@@ -607,6 +570,10 @@ app.post("/approvals", async (req, res) => {
   }
 });
 
-app.listen(4000, () => {
-  console.log("VANTA backend running on port 4000");
+// -------------------------------
+// START SERVER
+// -------------------------------
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => {
+  console.log(`VANTA backend running on port ${PORT}`);
 });
