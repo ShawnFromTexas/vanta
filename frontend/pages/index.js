@@ -12,6 +12,11 @@ export default function Home() {
   const [error, setError] = useState("");
   const [showConfetti, setShowConfetti] = useState(false);
 
+  // 🔗 Backend URL (env first, fallback to Render)
+  const BACKEND_URL =
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
+    "https://vanta-jjcc.onrender.com";
+
   const CHAINS = [
     { id: "ethereum", label: "Ethereum", color: "border-emerald-400 text-emerald-300" },
     { id: "base", label: "Base", color: "border-blue-400 text-blue-300" },
@@ -35,9 +40,10 @@ export default function Home() {
     try {
       const promises = [];
 
+      // 🔍 Diagnose transaction
       if (txHash.trim()) {
         promises.push(
-          fetch("http://localhost:4000/diagnose", {
+          fetch(`${BACKEND_URL}/diagnose`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ txHash, chain }),
@@ -47,16 +53,17 @@ export default function Home() {
         promises.push(Promise.resolve(null));
       }
 
+      // 🧠 Wallet summary + approvals
       if (walletAddress.trim()) {
         promises.push(
-          fetch("http://localhost:4000/wallet-summary", {
+          fetch(`${BACKEND_URL}/wallet-summary`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ address: walletAddress, chain }),
           }).then((r) => r.json())
         );
         promises.push(
-          fetch("http://localhost:4000/approvals", {
+          fetch(`${BACKEND_URL}/approvals`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ address: walletAddress, chain }),
@@ -90,6 +97,7 @@ export default function Home() {
         setTimeout(() => setShowConfetti(false), 4000);
       }
     } catch (e) {
+      console.error(e);
       setError("Backend unreachable");
     } finally {
       setLoading(false);
@@ -123,26 +131,46 @@ export default function Home() {
     const { totalUsdValue, portfolio, txCount } = summary;
 
     const hasStable =
-      portfolio && portfolio.some((t) => t.symbol.toUpperCase().includes("USDC") || t.symbol.toUpperCase().includes("USDT") || t.symbol.toUpperCase().includes("DAI"));
+      portfolio &&
+      portfolio.some((t) =>
+        ["USDC", "USDT", "DAI"].some((s) =>
+          t.symbol.toUpperCase().includes(s)
+        )
+      );
     const hasManyTokens = portfolio && portfolio.length >= 5;
     const isWhale = totalUsdValue > 100000;
     const isNew = txCount < 10;
 
-    if (isWhale) return { label: "Whale", color: "bg-amber-500/20 text-amber-300 border-amber-400" };
-    if (hasManyTokens && !hasStable) return { label: "DeFi Degen", color: "bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-400" };
-    if (hasStable && totalUsdValue > 5000) return { label: "Stablecoin Maxi", color: "bg-emerald-500/20 text-emerald-300 border-emerald-400" };
-    if (isNew) return { label: "New Wallet", color: "bg-blue-500/20 text-blue-300 border-blue-400" };
-    return { label: "Balanced User", color: "bg-cyan-500/20 text-cyan-300 border-cyan-400" };
+    if (isWhale)
+      return {
+        label: "Whale",
+        color: "bg-amber-500/20 text-amber-300 border-amber-400",
+      };
+    if (hasManyTokens && !hasStable)
+      return {
+        label: "DeFi Degen",
+        color: "bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-400",
+      };
+    if (hasStable && totalUsdValue > 5000)
+      return {
+        label: "Stablecoin Maxi",
+        color: "bg-emerald-500/20 text-emerald-300 border-emerald-400",
+      };
+    if (isNew)
+      return {
+        label: "New Wallet",
+        color: "bg-blue-500/20 text-blue-300 border-blue-400",
+      };
+    return {
+      label: "Balanced User",
+      color: "bg-cyan-500/20 text-cyan-300 border-cyan-400",
+    };
   };
 
   const getWhaleBadge = (summary) => {
     if (!summary) return null;
-    if (summary.totalUsdValue > 250000) {
-      return "Mega Whale";
-    }
-    if (summary.totalUsdValue > 50000) {
-      return "Whale";
-    }
+    if (summary.totalUsdValue > 250000) return "Mega Whale";
+    if (summary.totalUsdValue > 50000) return "Whale";
     return null;
   };
 
@@ -152,40 +180,58 @@ export default function Home() {
 
     if (summary) {
       if (summary.totalUsdValue > 10000) {
-        notes.push("This wallet holds a meaningful on-chain balance; consider monitoring for large moves.");
+        notes.push(
+          "This wallet holds a meaningful on-chain balance; consider monitoring for large moves."
+        );
       }
       if (summary.portfolio && summary.portfolio.length > 0) {
         const stables = summary.portfolio.filter((t) =>
           ["USDC", "USDT", "DAI"].includes(t.symbol.toUpperCase())
         );
         if (stables.length > 0) {
-          notes.push("A significant portion of this wallet is in stablecoins, suggesting a defensive or parked capital posture.");
+          notes.push(
+            "A significant portion of this wallet is in stablecoins, suggesting a defensive or parked capital posture."
+          );
         }
         const longTail = summary.portfolio.filter(
           (t) => !["USDC", "USDT", "DAI"].includes(t.symbol.toUpperCase())
         );
         if (longTail.length >= 3) {
-          notes.push("This wallet is exposed to multiple non-stable tokens, indicating higher volatility and risk.");
+          notes.push(
+            "This wallet is exposed to multiple non-stable tokens, indicating higher volatility and risk."
+          );
         }
       }
       if (summary.txCount < 5) {
-        notes.push("Low transaction count suggests this wallet is either new or rarely used.");
+        notes.push(
+          "Low transaction count suggests this wallet is either new or rarely used."
+        );
       } else if (summary.txCount > 100) {
-        notes.push("High transaction count suggests an active user or automated activity.");
+        notes.push(
+          "High transaction count suggests an active user or automated activity."
+        );
       }
     }
 
     if (tx) {
       const classification = classifyTransaction(tx);
-      notes.push(`The latest analyzed transaction is classified as: ${classification}.`);
+      notes.push(
+        `The latest analyzed transaction is classified as: ${classification}.`
+      );
       if (tx.tokenTransfers && tx.tokenTransfers.length > 0) {
-        notes.push("This transaction involves ERC-20 token transfers, which may represent swaps, bridges, or protocol interactions.");
+        notes.push(
+          "This transaction involves ERC-20 token transfers, which may represent swaps, bridges, or protocol interactions."
+        );
       }
       if (tx.valueUsd && tx.valueUsd > 5000) {
-        notes.push("This transaction moved a relatively large USD value; consider tracking this wallet for future activity.");
+        notes.push(
+          "This transaction moved a relatively large USD value; consider tracking this wallet for future activity."
+        );
       }
       if (tx.contractIntel?.isContract) {
-        notes.push("The destination is a smart contract; review contract risk before interacting heavily.");
+        notes.push(
+          "The destination is a smart contract; review contract risk before interacting heavily."
+        );
       }
     }
 
@@ -220,7 +266,8 @@ export default function Home() {
           : "Moderate activity; some behavioral data available.",
     });
 
-    const unknownContracts = riskFlags?.includes("Interacts with unknown contracts");
+    const unknownContracts =
+      riskFlags?.includes("Interacts with unknown contracts");
     breakdown.push({
       label: "Contract Risk",
       score: unknownContracts ? 45 : 60,
@@ -230,15 +277,18 @@ export default function Home() {
     });
 
     const approvals = approvalsData?.approvals || [];
-    const hasHighApproval = approvals.some((a) => a.risk === "high" || a.unlimited);
+    const hasHighApproval = approvals.some(
+      (a) => a.risk === "high" || a.unlimited
+    );
     breakdown.push({
       label: "Approval Risk",
       score: hasHighApproval ? 40 : approvals.length > 0 ? 55 : 65,
-      notes: approvals.length === 0
-        ? "No tracked token approvals detected for curated protocols."
-        : hasHighApproval
-        ? "One or more large or unlimited approvals detected; consider revoking if unused."
-        : "Approvals detected but not flagged as high risk based on current heuristics.",
+      notes:
+        approvals.length === 0
+          ? "No tracked token approvals detected for curated protocols."
+          : hasHighApproval
+          ? "One or more large or unlimited approvals detected; consider revoking if unused."
+          : "Approvals detected but not flagged as high risk based on current heuristics.",
     });
 
     return breakdown;
